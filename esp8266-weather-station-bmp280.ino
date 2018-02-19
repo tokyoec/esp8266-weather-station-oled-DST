@@ -28,27 +28,6 @@ See more at http://blog.squix.ch
  * Version 1.0.1 - Bugfix
  *  - Added Missing I2C variables
  *
- * Version 1.0.0 - Bugfix
- *	- Fixed ticker overwrite bug: Split DHT and Wunderground timed updates out to 2 tickers. Thanks @charonofssi
- *
- * Version 0.1.0 - Initial Released Version
- *  Added Wifi Splash screen and credit to Squix78
- *  Modified progress bar to a thicker and symmetrical shape
- *  Replaced TimeClient with built-in lwip sntp client (no need for external ntp client library)
- *  Added Daylight Saving Time Auto adjuster with DST rules using simpleDSTadjust library
- *  https://github.com/neptune2/simpleDSTadjust
- *  Added Setting examples for Boston, Zurich and Sydney
-  *  Selectable NTP servers for each locale
-  *  DST rules and timezone settings customizable for each locale
-   *  See https://www.timeanddate.com/time/change/ for DST rules
-  *  Added AM/PM or 24-hour option for each locale
- *  Changed to 7-segment Clock font from http://www.keshikan.net/fonts-e.html
- *  Added Forecast screen for days 4-6
-  *   >>> Need to change WundergroundClient.h in ESP8266_Weather_Station library
-  *    #define MAX_FORECAST_PERIODS 12  // Was 7
- *  Added support for DHT22 Indoor Temperature and Humidity
- *  Fixed bug preventing display.flipScreenVertically() from working
- *  Slight adjustment to overlay
  */
 
 #include <ESP8266WiFi.h>
@@ -61,7 +40,7 @@ See more at http://blog.squix.ch
 #include <ESP8266WebServer.h>
 #include <WiFiManager.h>
 
-// #include "SSD1306Wire.h"
+#include "SSD1306Wire.h"
 // #include <SPI.h> // Only needed for Arduino 1.6.5 and earlier
 #include "SSD1306Spi.h"
 #include "OLEDDisplayUi.h"
@@ -71,7 +50,6 @@ See more at http://blog.squix.ch
 #include "WeatherStationImages.h"
 #include "DSEG7Classic-BoldFont.h"
 #include <time.h>
-#include "DHT.h"
 #include "ThingspeakClient.h"
 #include <simpleDSTadjust.h>
 
@@ -90,29 +68,50 @@ const int UPDATE_INTERVAL_SECS = 30 + (10 * 60); // Update every 10.5 minutes
 // Display Settings
 // Pin definitions for I2C OLED
 const int I2C_DISPLAY_ADDRESS = 0x3c;
-// const int SDA_PIN = 0;
-// const int SDC_PIN = 2;
-const int SDA_PIN = D2;
+const int SDA_PIN = D3;
 const int SDC_PIN = D4;
 
-// Pin definitions for SPI OLED
-#define OLED_CS     D8  // Chip select
-#define OLED_DC     D2  // Data/Command
-#define OLED_RESET  D0  // RESET
+#include <Adafruit_BMP280.h>
+#define BMP_SCK 13
+#define BMP_MISO 12
+#define BMP_MOSI 11 
+#define BMP_CS 10
 
-// DHT Settings
-// #define DHTPIN D2 // NodeMCU
-#define DHTPIN D4 // Wemos D1R2 Mini
-#define DHTTYPE DHT22   // DHT22  (AM2302), AM2321
+Adafruit_BMP280 bmp; // I2C
+//Adafruit_BMP280 bmp(BMP_CS); // hardware SPI
+//Adafruit_BMP280 bmp(BMP_CS, BMP_MOSI, BMP_MISO,  BMP_SCK);
+float humidity = 0.0;
+float temperature = 0.0;
+
 char FormattedTemperature[10];
 char FormattedHumidity[10];
 
 // -----------------------------------
 // Locales (uncomment only 1)
-#define Zurich
+#define Tokyo
+// #define Zurich
 //#define Boston
 // #define Sydney
 //------------------------------------
+
+#ifdef Tokyo
+//DST rules for Central European Time Zone
+#define UTC_OFFSET +9
+struct dstRule StartRule = {"CEST", Last, Sun, Mar, 2, 3600}; // Central European Summer Time = UTC/GMT +2 hours
+struct dstRule EndRule = {"CET", Last, Sun, Oct, 2, 0};       // Central European Time = UTC/GMT +1 hour
+
+// Uncomment for 24 Hour style clock
+#define STYLE_24HR
+
+#define NTP_SERVERS "0.ntp.nict.jp", "1.ntp.jst.mfeed.ad.jp", "2.ch.pool.ntp.org"
+
+// Wunderground Settings
+const boolean IS_METRIC = true;
+const String WUNDERGRROUND_API_KEY = "e3b7bc9b058161d7";
+const String WUNDERGRROUND_LANGUAGE = "EN";
+const String WUNDERGROUND_COUNTRY = "JP";
+const String WUNDERGROUND_CITY = "Tokyo";
+#endif
 
 #ifdef Zurich
 //DST rules for Central European Time Zone
@@ -132,6 +131,7 @@ const String WUNDERGRROUND_LANGUAGE = "EN";
 const String WUNDERGROUND_COUNTRY = "CH";
 const String WUNDERGROUND_CITY = "Zurich";
 #endif
+
 
 #ifdef Boston
 //DST rules for US Eastern Time Zone (New York, Boston)
@@ -177,10 +177,10 @@ const String THINGSPEAK_API_READ_KEY = "L2VIW20QVNZJBLAK";
 
 // Initialize the I2 oled display for address 0x3c
 // sda-pin=14 and sdc-pin=12
-// SSD1306Wire     display(I2C_DISPLAY_ADDRESS, SDA_PIN, SDC_PIN);
+SSD1306Wire     display(I2C_DISPLAY_ADDRESS, SDA_PIN, SDC_PIN);
 
 // SPI OLED
-SSD1306Spi display(OLED_RESET, OLED_DC, OLED_CS);
+// SSD1306Spi display(OLED_RESET, OLED_DC, OLED_CS);
 
 OLEDDisplayUi   ui( &display );
 
@@ -195,11 +195,6 @@ simpleDSTadjust dstAdjusted(StartRule, EndRule);
 
 // Set to false, if you prefere imperial/inches, Fahrenheit
 WundergroundClient wunderground(IS_METRIC);
-
-// Initialize the temperature/ humidity sensor
-DHT dht(DHTPIN, DHTTYPE);
-float humidity = 0.0;
-float temperature = 0.0;
 
 ThingspeakClient thingspeak;
 
@@ -249,7 +244,7 @@ void setup() {
   display.clear();
   display.display();
   
-  display.flipScreenVertically();  // Comment out to flip display 180deg
+  // display.flipScreenVertically();  // Comment out to flip display 180deg
   display.setFont(ArialMT_Plain_10);
   display.setTextAlignment(TEXT_ALIGN_CENTER);
   display.setContrast(255);
@@ -321,6 +316,12 @@ void setup() {
 
   ticker1.attach(UPDATE_INTERVAL_SECS, setReadyForWeatherUpdate);
   ticker2.attach(60, setReadyForDHTUpdate);
+
+  if (!bmp.begin(0x76)) 
+  {
+    Serial.println("Could not find BMP280");
+    while (1) {}
+  }
 }
 
 void loop() {
@@ -328,10 +329,10 @@ void loop() {
   if (readyForWeatherUpdate && ui.getUiState()->frameState == FIXED) {
     updateData(&display);
   }
-
+    
   if (readyForDHTUpdate && ui.getUiState()->frameState == FIXED)
     updateDHT();
-    
+
   int remainingTimeBudget = ui.update();
 
   if (remainingTimeBudget > 0) {
@@ -385,10 +386,10 @@ void updateData(OLEDDisplay *display) {
   drawProgress(display, 50, "Updating forecasts...");
   wunderground.updateForecast(WUNDERGRROUND_API_KEY, WUNDERGRROUND_LANGUAGE, WUNDERGROUND_COUNTRY, WUNDERGROUND_CITY);
 
-  drawProgress(display, 70, "Updating DHT Sensor");
-  humidity = dht.readHumidity();
-  drawProgress(display, 80, "Updating DHT Sensor");
-  temperature = dht.readTemperature(!IS_METRIC);
+  drawProgress(display, 70, "Updating Pressure");
+  humidity = bmp.readPressure();
+  drawProgress(display, 80, "Updating Temperature");
+  temperature = bmp.readTemperature();
   delay(500);
   
   drawProgress(display, 90, "Updating thingspeak...");
@@ -400,8 +401,8 @@ void updateData(OLEDDisplay *display) {
 
 // Called every 1 minute
 void updateDHT() {
-  humidity = dht.readHumidity();
-  temperature = dht.readTemperature(!IS_METRIC);
+  humidity = bmp.readPressure();
+  temperature = bmp.readTemperature();
   readyForDHTUpdate = false;
 }
 
@@ -475,12 +476,12 @@ void drawForecast2(OLEDDisplay *display, OLEDDisplayUiState* state, int16_t x, i
 void drawIndoor(OLEDDisplay *display, OLEDDisplayUiState* state, int16_t x, int16_t y) {
   display->setTextAlignment(TEXT_ALIGN_CENTER);
   display->setFont(ArialMT_Plain_10);
-  display->drawString(64 + x, 0, "DHT22 Indoor Sensor");
+  display->drawString(64 + x, 0, "BMP280 Indoor Sensor");
   display->setFont(ArialMT_Plain_16);
   dtostrf(temperature,4, 1, FormattedTemperature);
   display->drawString(64+x, 12, "Temp: " + String(FormattedTemperature) + (IS_METRIC ? "°C": "°F"));
-  dtostrf(humidity,4, 1, FormattedHumidity);
-  display->drawString(64+x, 30, "Humidity: " + String(FormattedHumidity) + "%");
+  dtostrf(humidity / 100,4, 1, FormattedHumidity);
+  display->drawString(64+x, 30, "Pressure: " + String(FormattedHumidity) + "hPa");
 
 }
 
