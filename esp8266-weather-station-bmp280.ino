@@ -1,3 +1,4 @@
+
 /**The MIT License (MIT)
 
 Copyright (c) 2016 by Daniel Eichhorn
@@ -68,8 +69,13 @@ const int UPDATE_INTERVAL_SECS = 30 + (10 * 60); // Update every 10.5 minutes
 // Display Settings
 // Pin definitions for I2C OLED
 const int I2C_DISPLAY_ADDRESS = 0x3c;
-const int SDA_PIN = D3;
-const int SDC_PIN = D4;
+const int SDA_PIN = 0; // D3;
+const int SDC_PIN = 2; // D4;
+
+#include <TM1637Display.h>
+const int CLK = 12;  // D6; //Set the CLK pin connection to the display
+const int DIO = 13;  // D7; //Set the DIO pin connection to the display
+TM1637Display display2(CLK, DIO); //set up the 4-Digit Display.
 
 #include <Adafruit_BMP280.h>
 #define BMP_SCK 13
@@ -244,7 +250,7 @@ void setup() {
   display.clear();
   display.display();
   
-  // display.flipScreenVertically();  // Comment out to flip display 180deg
+  display.flipScreenVertically();  // Comment out to flip display 180deg
   display.setFont(ArialMT_Plain_10);
   display.setTextAlignment(TEXT_ALIGN_CENTER);
   display.setContrast(255);
@@ -253,6 +259,9 @@ void setup() {
   display.drawXbm(-6, 5, WiFi_Logo_width, WiFi_Logo_height, WiFi_Logo_bits);
   display.drawString(88, 18, "Weather Station\nBy Squix78\nmods by Neptune");
   display.display();
+
+  // TM1637Display
+  display2.setBrightness(0x04); //set the diplay to 0..7 brightness
 
   //WiFiManager
   //Local intialization. Once its business is done, there is no need to keep it around
@@ -481,7 +490,7 @@ void drawIndoor(OLEDDisplay *display, OLEDDisplayUiState* state, int16_t x, int1
   dtostrf(temperature,4, 1, FormattedTemperature);
   display->drawString(64+x, 12, "Temp: " + String(FormattedTemperature) + (IS_METRIC ? "°C": "°F"));
   dtostrf(humidity / 100,4, 1, FormattedHumidity);
-  display->drawString(64+x, 30, "Pressure: " + String(FormattedHumidity) + "hPa");
+  display->drawString(64+x, 30, "Pres: " + String(FormattedHumidity) + "hPa");
 
 }
 
@@ -514,6 +523,9 @@ void drawHeaderOverlay(OLEDDisplay *display, OLEDDisplayUiState* state) {
   char time_str[11];
   time_t now = dstAdjusted.time(nullptr);
   struct tm * timeinfo = localtime (&now);
+
+  int numTime = timeinfo->tm_hour * 100 + timeinfo->tm_min;
+  display2.showNumberDecEx(numTime, 0x40);
 
   display->setFont(ArialMT_Plain_10);
 
